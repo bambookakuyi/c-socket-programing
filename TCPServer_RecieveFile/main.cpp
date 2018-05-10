@@ -1,21 +1,39 @@
 #include<WinSock2.h>
 #include<time.h>
 #include<iostream>
+#include<thread>
+#include<mutex>
 #include<memory>
 #pragma comment(lib,"ws2_32.lib")//加载ws2_32.dll
 
 #define BUF_SIZE 1024
 
-using namespace std;
+class thread_guard{
+private:
+    std::thread &t;//引用生成线程的别名
+public:
+    explicit thread_guard(std::thread &_t):t(_t){}//explicit关键字用来修饰类的构造函数，
+                    //被修饰的构造函数的类，不能发生相应的隐式类型转换，只能以显示的方式进行类型转换。
+    ~thread_guard(){
+        //因为线程只能被join()一次，所以先测试下线程是否joinable()
+        if(t.joinable())
+            t.join();
+    }
+    //禁止编译器自动生成拷贝构造函数和拷贝赋值函数
+    thread_guard(thread_guard const&)=delete;
+    thread_guard& operator=(thread_guard const&)=delete;
+};
+
+//using namespace std;//不能使用这个，因为C++11中有bind函数，如果using std会使socket中的bind与C++11中的冲突。
 
 bool initSocket();
-bool process(SOCKET sServer);
+bool process(SOCKET sClient);
 int main()
 {
     //初始化套接字动态库
     WSADATA wsd;
     if(WSAStartup(MAKEWORD(2,2),&wsd)!=0){//导入socket2.0
-        cout<<"WSASrartup failed!\n";
+        std::cout<<"WSASrartup failed!\n";
         return -1;
     }
 
@@ -29,9 +47,9 @@ void close_socket(SOCKET *socketPtr){closesocket(*socketPtr);}
 bool initSocket(){
     //创建服务器套接字
     SOCKET sServer=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
-    shared_ptr<SOCKET> sServerPtr(&sServer,close_socket);
+    std::shared_ptr<SOCKET> sServerPtr(&sServer,close_socket);
     if(sServer==INVALID_SOCKET){
-        cout<<"socket failed!\n";
+        std::cout<<"socket failed!\n";
         return false;
     }
 
@@ -45,35 +63,40 @@ bool initSocket(){
     //绑定套接字
     int retVal=bind(sServer,(LPSOCKADDR)&addrServ,sizeof(SOCKADDR_IN));
     if(retVal==SOCKET_ERROR){
-        cout<<"bind failed!\n";
+        std::cout<<"bind failed!\n";
         return false;
     }
 
     //开始监听:等待连接的队列数量为1
     retVal=listen(sServer,1);
     if(retVal==SOCKET_ERROR){
-        cout<<"listen failed!\n";
+        std::cout<<"listen failed!\n";
         return false;
     }
 
     while(true){
-        if(!process(sServer))
+        //接受客户端的请求
+        SOCKADDR_IN addrClient;
+        int addrClientlen=sizeof(addrClient);
+        SOCKET sClient=accept(sServer,(SOCKADDR FAR*)&addrClient,&addrClientlen);
+        std::shared_ptr<SOCKET> sClientPtr(&sClient,close_socket);
+        if(sClient==INVALID_SOCKET){
+            std::cout<<"accep failed!\n";
             return false;
+        }
+        std::thread th(process,sClient);
+        th.detach();//detach()分离线程，使线程之间互不影响，不过不能保证主线程结束后还能继续运行。
+        thread_guard g(th);
     }
-
     return true;
 }
-bool process(SOCKET sServer){
-    //接受客户端的请求
-    SOCKADDR_IN addrClient;
-    int addrClientlen=sizeof(addrClient);
-
-    SOCKET sClient=accept(sServer,(SOCKADDR FAR*)&addrClient,&addrClientlen);
-    shared_ptr<SOCKET> sClientPtr(&sClient,close_socket);
-    if(sClient==INVALID_SOCKET){
-        cout<<"accep failed!\n";
-        return false;
-    }
+//std::mutex m;//mutex是用来保证线程同步的，防止不同的线程同时操作同一个共享数据。
+bool process(SOCKET sClient){
+    /*************************************
+    *lock_guard是基于作用域的，能够自解锁，当该对象创建时，它会像m.lock()一样获得互斥锁，
+    *当生命周期结束时，它会自动析构，就如同m.unlock()，这样就不会因为某个线程异常退出而影响其他线程
+    *************************/
+    //std::lock_guard<std::mutex> lockGuard(m);
 
     //获取当前时间并转变成字符串
     time_t now;
@@ -85,10 +108,10 @@ bool process(SOCKET sServer){
     //创建文件
     FILE *fp=fopen(filename,"wb");//二进制形式打开（创建）文件
     if(fp==NULL){
-        cout<<"Cannot open file,press any key to exit!\n";
+        std::cout<<"Cannot open file,press any key to exit!\n";
         return false;
     }
-    shared_ptr<FILE> file(fp,&fclose);
+    std::shared_ptr<FILE> file(fp,&fclose);
     //循环接收数据，直到文件接收完毕
     char buffer[BUF_SIZE]={0};//文件缓冲区
     int nCount;//存放获取数据的长度
@@ -97,6 +120,8 @@ bool process(SOCKET sServer){
     while((nCount=recv(sClient,buffer,BUF_SIZE,0))>0){
         fwrite(buffer,nCount,1,fp);//从fp中写入nCount个字节
     }
-    cout<<"File transfer success!\n";
+    buffer[0]=0;
+    send(sClient,buffer,1,0);
+    //cout<<"File transfer success!\n";
     return true;
 }
