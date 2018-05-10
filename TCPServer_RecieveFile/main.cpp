@@ -1,10 +1,15 @@
 #include<WinSock2.h>
+#include<time.h>
 #include<iostream>
+#include<memory>
 #pragma comment(lib,"ws2_32.lib")//加载ws2_32.dll
 
 #define BUF_SIZE 1024
 
 using namespace std;
+
+bool initSocket();
+bool process(SOCKET sServer);
 int main()
 {
     //初始化套接字动态库
@@ -14,12 +19,20 @@ int main()
         return -1;
     }
 
+    bool re=initSocket();
+
+    WSACleanup();//释放套接字资源
+    if(!re) return -1;
+    return 0;
+}
+void close_socket(SOCKET *socketPtr){closesocket(*socketPtr);}
+bool initSocket(){
     //创建服务器套接字
     SOCKET sServer=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+    shared_ptr<SOCKET> sServerPtr(&sServer,close_socket);
     if(sServer==INVALID_SOCKET){
         cout<<"socket failed!\n";
-        WSACleanup();//释放套接字资源
-        return -1;
+        return false;
     }
 
     //服务器套接字地址
@@ -33,38 +46,49 @@ int main()
     int retVal=bind(sServer,(LPSOCKADDR)&addrServ,sizeof(SOCKADDR_IN));
     if(retVal==SOCKET_ERROR){
         cout<<"bind failed!\n";
-        closesocket(sServer);//关闭套接字
-        WSACleanup();//释放套接字资源
-        return -1;
+        return false;
     }
 
     //开始监听:等待连接的队列数量为1
     retVal=listen(sServer,1);
     if(retVal==SOCKET_ERROR){
         cout<<"listen failed!\n";
-        closesocket(sServer);//关闭套接字
-        WSACleanup();//释放套接字资源
-        return -1;
+        return false;
     }
 
+    while(true){
+        if(!process(sServer))
+            return false;
+    }
+
+    return true;
+}
+bool process(SOCKET sServer){
     //接受客户端的请求
     SOCKADDR_IN addrClient;
     int addrClientlen=sizeof(addrClient);
+
     SOCKET sClient=accept(sServer,(SOCKADDR FAR*)&addrClient,&addrClientlen);
+    shared_ptr<SOCKET> sClientPtr(&sClient,close_socket);
     if(sClient==INVALID_SOCKET){
         cout<<"accep failed!\n";
-        closesocket(sServer);//关闭套接字
-        WSACleanup();//释放套接字资源
-        return -1;
+        return false;
     }
 
+    //获取当前时间并转变成字符串
+    time_t now;
+    now=time(&now);
+    char filename[128];//用系统时间给接收文件命名，并将文件保存到recieveFile文件夹中
+    struct tm *today=localtime(&now);
+    strftime(filename,128,"recieveFile/%Y_%m_%d__%H_%M_%S.docx",today);
+
     //创建文件
-    char filename[]={"recieve.docx"};//文件名，该文件用于存放客户端发送过来的文件数据
     FILE *fp=fopen(filename,"wb");//二进制形式打开（创建）文件
     if(fp==NULL){
         cout<<"Cannot open file,press any key to exit!\n";
-        return -1;
+        return false;
     }
+    shared_ptr<FILE> file(fp,&fclose);
     //循环接收数据，直到文件接收完毕
     char buffer[BUF_SIZE]={0};//文件缓冲区
     int nCount;//存放获取数据的长度
@@ -73,14 +97,6 @@ int main()
     while((nCount=recv(sClient,buffer,BUF_SIZE,0))>0){
         fwrite(buffer,nCount,1,fp);//从fp中写入nCount个字节
     }
-
     cout<<"File transfer success!\n";
-
-    //退出
-    fclose(fp);//关闭文件
-    closesocket(sServer);//关闭服务器套接字
-    closesocket(sClient);//关闭客户端套接字
-    WSACleanup();//释放套接字资源
-
-    return 0;
+    return true;
 }
