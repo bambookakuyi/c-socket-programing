@@ -54,7 +54,7 @@ bool process(){
     shared_ptr<FILE> file(fp,&fclose);
     //循环发送数据，直到文件结尾
     char buffer[BUF_SIZE]={0};
-    int nCount=fread(buffer,1,BUF_SIZE,fp);
+    int nCount=fread(buffer,1,BUF_SIZE,fp);//fread最多读取BUF_SIZE个元素，每个元素1字节，如果调用成功返回实际读取到的元素个数，如果不成功返回 0。
     fd_set fdset={0};
     timeval timeout = {0};
     timeout.tv_usec = 500;//最多等待时间为500ms，对阻塞操作则为NULL。
@@ -70,8 +70,9 @@ bool process(){
             continue;
         }else{
             send(sHost,buffer,nCount,0);
+            nCount=fread(buffer,1,BUF_SIZE,fp);
+            Sleep(40);
         }
-        nCount=fread(buffer,1,BUF_SIZE,fp);
     }
     /*****************
      * 1.shutdown()中的参数SD_SEND表明关闭发送通道，TCP会将发送缓存中的数据都发送完毕并收到所
